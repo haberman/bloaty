@@ -5,6 +5,9 @@ set(RE2_BUILD_TESTING OFF CACHE BOOL "enable testing for RE2" FORCE)
 add_subdirectory(third_party/re2)
 include_directories(third_party/re2)
 
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Enable testing of the benchmark library." FORCE)
+add_subdirectory(third_party/benchmark)
+
 include_directories(.)
 include_directories(src)
 include_directories(third_party/abseil-cpp)
@@ -72,4 +75,10 @@ if(BUILD_TESTING)
   add_test(NAME bloaty_test_x86 COMMAND bloaty_test WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/linux-x86)
   add_test(NAME bloaty_misc_test COMMAND bloaty_misc_test WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/misc)
   add_test(NAME fuzz_test COMMAND fuzz_test ${fuzz_corpus} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/testdata/fuzz_corpus)
+
+  add_executable(bloaty_benchmark benchmarks/benchmark.cc)
+  target_link_libraries(bloaty_benchmark libbloaty re2 benchmark "${CMAKE_THREAD_LIBS_INIT}")
+
+  add_executable(benchmark_test_input benchmarks/benchmark_test_input.cc)
+  set_target_properties(benchmark_test_input PROPERTIES COMPILE_FLAGS "-O0 -ffunction-sections")
 endif()
