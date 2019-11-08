@@ -463,6 +463,7 @@ struct OutputOptions {
   OutputFormat output_format = OutputFormat::kPrettyPrint;
   size_t max_label_len = 80;
   ShowDomain show = ShowDomain::kShowBoth;
+  bool pivot = false;
 };
 
 struct RollupOutput {

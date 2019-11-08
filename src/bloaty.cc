@@ -700,6 +700,29 @@ std::string PercentString(double percent, bool diff_mode) {
   }
 }
 
+// A little intermediate representation that we put our output into before
+// converting it to either CSV, TSV, or pretty-printing.
+struct Output {
+  // For each row we track the innermost label and a value for every column.
+  // We also need to know if nesting is increasing or decreasing compared to the
+  // previous row.
+  struct Row {
+    // 1/-1/0 to increase/decrease/maintain nesting
+    int nest;
+
+    // Innermost label.
+    std::string label;
+
+    // Same size as column_names.
+    std::vector<std::string> values;
+  }
+  std::vector<std::string> column_names;
+  std::vector<Row> rows;
+};
+
+void CreateOutput(const RollupRow& row, Output* output) {
+}
+
 }  // namespace
 
 void RollupOutput::PrettyPrintRow(const RollupRow& row, size_t indent,
@@ -798,13 +821,24 @@ void RollupOutput::PrintRowToCSV(const RollupRow& row,
   *out << absl::StrJoin(parent_labels, sep) << "\n";
 }
 
-void RollupOutput::PrintTreeToCSV(const RollupRow& row,
-                                  std::vector<std::string> parent_labels,
-                                  std::ostream* out, bool tabs) const {
-  if (tabs) {
-    parent_labels.push_back(row.name);
-  } else {
-    parent_labels.push_back(CSVEscape(row.name));
+void RollupOutput::PrintToCSV(const Output& output, std::ostream* out, bool tabs) const {
+  // Print header line.
+  PrintCSVRow(output.column_names, out, tabs);
+
+  std::vector<std::string> parent_labels;
+
+  for (const auto& row : output.rows) {
+    switch (row.nest) {
+      case -1:
+        parent_labels.pop_back();
+        break;
+      case 1:
+      if (tabs) {
+        parent_labels.push_back(row.name);
+      } else {
+        parent_labels.push_back(CSVEscape(row.name));
+      }
+    }
   }
 
   if (row.sorted_children.size() > 0) {
@@ -824,6 +858,49 @@ void RollupOutput::PrintToCSV(std::ostream* out, bool tabs) const {
   *out << absl::StrJoin(names, sep) << "\n";
   for (const auto& child_row : toplevel_row_.sorted_children) {
     PrintTreeToCSV(child_row, std::vector<std::string>(), out, tabs);
+  }
+}
+
+void RollupOutput::Print(const OutputOptions& options, std::ostream* out) {
+  Output output;
+
+  if (options.pivot) {
+    THROW("Not yet implemented");
+  } else {
+    bool pretty = options.output_format == bloaty::OutputFormat::kPrettyPrint;
+    if (ShowVM(options)) {
+      output.column_names.push_back("vmsize");
+    }
+    if (ShowFile(options)) {
+      output.column_names.push_back("filesize");
+    }
+    for (const auto& child_row : toplevel_row_.sorted_children) {
+      AddRow(child_row, std::vector<std::string>(), &output);
+    }
+    if () {
+      // The "TOTAL" row comes after all other rows.
+      AddRow(toplevel_row_, &output);
+    }
+  }
+
+  if (!source_names_.empty()) {
+    switch (options.output_format) {
+      case bloaty::OutputFormat::kPrettyPrint:
+        PrettyPrint(output, out);
+        break;
+      case bloaty::OutputFormat::kCSV:
+        PrintToCSV(output, out, /*tabs=*/false);
+        break;
+      case bloaty::OutputFormat::kTSV:
+        PrintToCSV(output, out, /*tabs=*/true);
+        break;
+      default:
+        BLOATY_UNREACHABLE();
+    }
+  }
+
+  if (!disassembly_.empty()) {
+    *out << disassembly_;
   }
 }
 
@@ -1720,6 +1797,11 @@ Options:
   -n NUM             How many rows to show per level before collapsing
                      other keys into '[Other]'.  Set to '0' for unlimited.
                      Defaults to 20.
+  --pivot            Uses the first data source as columns.  Requires either
+                     --domain=vm or --domain=file, since otherwise VM and FILE
+                     are the columns.  The first data source should not have
+                     too many distinct names or long names, otherwise the output
+                     will become unwieldy.
   -s SORTBY          Whether to sort by VM or File size.  Possible values
                      are:
                        -s vm
@@ -1904,6 +1986,8 @@ bool DoParseOptions(bool skip_unknown, int* argc, char** argv[],
       } else {
         options->set_max_rows_per_level(int_option);
       }
+    } else if (args.TryParseFlag("--pivot")) {
+      output_options->pivot = true;
     } else if (args.TryParseOption("--domain", &option)) {
       has_domain = true;
       if (option == "vm") {
@@ -1958,6 +2042,10 @@ bool DoParseOptions(bool skip_unknown, int* argc, char** argv[],
         options->add_filename(std::string(args.ConsumeArg()));
       }
     }
+  }
+
+  if (output_options->pivot && output_options->show == ShowDomain::kShowBoth) {
+    THROWF("--pivot requires --domain=vm or --domain=file");
   }
 
   if (options->data_source_size() == 0 &&
