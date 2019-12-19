@@ -502,7 +502,8 @@ void Rollup::SortAndAggregateRows(RollupRow* row, const Rollup* base,
 
   RollupRow others_row(others_label);
   others_row.other_count = child_rows.size() - options.max_rows_per_level();
-  others_row.name = absl::Substitute("[$0 Others]", others_row.other_count);
+  //others_row.name = absl::Substitute("[$0 Others]", others_row.other_count);
+  others_row.name = "[Others]";
   Rollup others_rollup;
   Rollup others_base;
 
@@ -632,6 +633,22 @@ std::string LeftPad(const std::string& input, size_t size) {
   return ret;
 }
 
+std::string RightPad(std::string input, size_t size) {
+  if (input.size() < size) {
+    size_t add = size - input.size();
+    input += std::string(add, ' ');
+  }
+  return input;
+}
+
+std::string ColumnHeader(std::string label) {
+  if (label.size() < 14) {
+    size_t add = (14 - label.size()) / 2;
+    label = RightPad(label, label.size() + add);
+  }
+  return LeftPad(label, 14);
+}
+
 std::string DoubleStringPrintf(const char *fmt, double d) {
   char buf[1024];
   snprintf(buf, sizeof(buf), fmt, d);
@@ -700,47 +717,41 @@ std::string PercentString(double percent, bool diff_mode) {
   }
 }
 
-// A little intermediate representation that we put our output into before
-// converting it to either CSV, TSV, or pretty-printing.
-struct Output {
-  // For each row we track the innermost label and a value for every column.
-  // We also need to know if nesting is increasing or decreasing compared to the
-  // previous row.
-  struct Row {
-    // 1/-1/0 to increase/decrease/maintain nesting
-    int nest;
-
-    // Innermost label.
-    std::string label;
-
-    // Same size as column_names.
-    std::vector<std::string> values;
-  }
-  std::vector<std::string> column_names;
-  std::vector<Row> rows;
-};
-
-void CreateOutput(const RollupRow& row, Output* output) {
-}
-
 }  // namespace
+
+void RollupOutput::PrettyPrintValues(size_t indent,
+                                     const std::vector<std::string>& values,
+                                     absl::string_view label,
+                                     const std::vector<std::string>& cols,
+                                     std::ostream* out) const {
+  std::vector<std::string> strings;
+  for (int i = 0; i < values.size(); i++) {
+    const std::string& str = values[i];
+    strings.emplace_back(RightPad(str, cols[i].size()));
+  }
+
+  *out << FixedWidthString("", indent) << absl::StrJoin(strings, "  ") << "    "
+       << label << "\n";
+}
 
 void RollupOutput::PrettyPrintRow(const RollupRow& row, size_t indent,
                                   const OutputOptions& options,
+                                  const std::vector<std::string>& cols,
                                   std::ostream* out) const {
+  std::vector<std::string> values;
   *out << FixedWidthString("", indent) << " ";
 
   if (ShowFile(options)) {
-    *out << PercentString(row.filepercent, diff_mode_) << " "
-         << SiPrint(row.filesize, diff_mode_) << " ";
+    values.emplace_back(absl::StrCat(PercentString(row.filepercent, diff_mode_),
+                                     " ", SiPrint(row.filesize, diff_mode_)));
   }
 
   if (ShowVM(options)) {
-    *out << PercentString(row.vmpercent, diff_mode_) << " "
-         << SiPrint(row.vmsize, diff_mode_) << " ";
+    values.emplace_back(absl::StrCat(PercentString(row.vmpercent, diff_mode_),
+                                     " ", SiPrint(row.vmsize, diff_mode_)));
   }
 
-  *out << "   " << row.name << "\n";
+  PrettyPrintValues(indent, values, row.name, cols, out);
 }
 
 bool RollupOutput::IsSame(const std::string& a, const std::string& b) {
@@ -757,9 +768,10 @@ bool RollupOutput::IsSame(const std::string& a, const std::string& b) {
 
 void RollupOutput::PrettyPrintTree(const RollupRow& row, size_t indent,
                                    const OutputOptions& options,
+                                   const std::vector<std::string>& cols,
                                    std::ostream* out) const {
   // Rows are printed before their sub-rows.
-  PrettyPrintRow(row, indent, options, out);
+  PrettyPrintRow(row, indent, options, cols, out);
 
   if (!row.vmsize && !row.filesize) {
     return;
@@ -772,38 +784,87 @@ void RollupOutput::PrettyPrintTree(const RollupRow& row, size_t indent,
   }
 
   for (const auto& child : row.sorted_children) {
-    PrettyPrintTree(child, indent + 2, options, out);
+    PrettyPrintTree(child, indent + 2, options, cols, out);
   }
+}
+
+void RollupOutput::PrintHeader(const std::vector<std::string> cols,
+                               std::ostream* out) const {
+  *out << " " << absl::StrJoin(cols, "  ") << "\n";
+
+  std::vector<std::string> separators;
+
+  for (const auto& str : cols) {
+    separators.push_back(std::string(str.size(), '-'));
+  }
+
+  *out << " " << absl::StrJoin(separators, "  ") << "\n";
 }
 
 void RollupOutput::PrettyPrint(const OutputOptions& options,
                                std::ostream* out) const {
+  std::vector<std::string> cols;
+
   if (ShowFile(options)) {
-    *out << "    FILE SIZE   ";
+    cols.push_back(ColumnHeader("FILE SIZE"));
   }
 
   if (ShowVM(options)) {
-    *out << "     VM SIZE    ";
+    cols.push_back(ColumnHeader("VM SIZE"));
   }
 
-  *out << "\n";
-
-  if (ShowFile(options)) {
-    *out << " -------------- ";
-  }
-
-  if (ShowVM(options)) {
-    *out << " -------------- ";
-  }
-
-  *out << "\n";
+  PrintHeader(cols, out);
 
   for (const auto& child : toplevel_row_.sorted_children) {
-    PrettyPrintTree(child, 0, options, out);
+    PrettyPrintTree(child, 0, options, cols, out);
   }
 
   // The "TOTAL" row comes after all other rows.
-  PrettyPrintRow(toplevel_row_, 0, options, out);
+  PrettyPrintRow(toplevel_row_, 0, options, cols, out);
+}
+
+void RollupOutput::PrettyPrintPivot(const OutputOptions& options,
+                                    std::ostream* out) const {
+  std::vector<std::string> cols;
+
+  for (const auto& child : toplevel_row_.sorted_children) {
+    cols.push_back(ColumnHeader(child.name));
+  }
+
+  PrintHeader(cols, out);
+
+  std::map<std::string, size_t> totals;
+
+  for (const auto& child : toplevel_row_.sorted_children) {
+    for (const auto& child2 : child.sorted_children) {
+      size_t total = ShowFile(options) ? child2.filesize : child2.vmsize;
+      totals[child2.name] += total;
+    }
+  }
+
+  typedef std::pair<std::string, size_t> TotalPair;
+
+  std::vector<TotalPair> rows(totals.begin(), totals.end());
+
+  std::sort(rows.begin(), rows.end(), [](const TotalPair& a, const TotalPair& b) {
+    return a.second > b.second;
+  });
+
+  for (const auto& pair : rows) {
+    std::vector<std::string> values;
+    for (const auto& child : toplevel_row_.sorted_children) {
+      std::string value{SiPrint(0, diff_mode_)};
+      for (const auto& child2 : child.sorted_children) {
+        if (child2.name == pair.first) {
+          size_t total = ShowFile(options) ? child2.filesize : child2.vmsize;
+          value = SiPrint(total, diff_mode_);
+          break;
+        }
+      }
+      values.push_back(LeftPad(value, 13));
+    }
+    PrettyPrintValues(0, values, pair.first, cols, out);
+  }
 }
 
 void RollupOutput::PrintRowToCSV(const RollupRow& row,
@@ -821,24 +882,13 @@ void RollupOutput::PrintRowToCSV(const RollupRow& row,
   *out << absl::StrJoin(parent_labels, sep) << "\n";
 }
 
-void RollupOutput::PrintToCSV(const Output& output, std::ostream* out, bool tabs) const {
-  // Print header line.
-  PrintCSVRow(output.column_names, out, tabs);
-
-  std::vector<std::string> parent_labels;
-
-  for (const auto& row : output.rows) {
-    switch (row.nest) {
-      case -1:
-        parent_labels.pop_back();
-        break;
-      case 1:
-      if (tabs) {
-        parent_labels.push_back(row.name);
-      } else {
-        parent_labels.push_back(CSVEscape(row.name));
-      }
-    }
+void RollupOutput::PrintTreeToCSV(const RollupRow& row,
+                                  std::vector<std::string> parent_labels,
+                                  std::ostream* out, bool tabs) const {
+  if (tabs) {
+    parent_labels.push_back(row.name);
+  } else {
+    parent_labels.push_back(CSVEscape(row.name));
   }
 
   if (row.sorted_children.size() > 0) {
@@ -861,47 +911,8 @@ void RollupOutput::PrintToCSV(std::ostream* out, bool tabs) const {
   }
 }
 
-void RollupOutput::Print(const OutputOptions& options, std::ostream* out) {
-  Output output;
-
-  if (options.pivot) {
-    THROW("Not yet implemented");
-  } else {
-    bool pretty = options.output_format == bloaty::OutputFormat::kPrettyPrint;
-    if (ShowVM(options)) {
-      output.column_names.push_back("vmsize");
-    }
-    if (ShowFile(options)) {
-      output.column_names.push_back("filesize");
-    }
-    for (const auto& child_row : toplevel_row_.sorted_children) {
-      AddRow(child_row, std::vector<std::string>(), &output);
-    }
-    if () {
-      // The "TOTAL" row comes after all other rows.
-      AddRow(toplevel_row_, &output);
-    }
-  }
-
-  if (!source_names_.empty()) {
-    switch (options.output_format) {
-      case bloaty::OutputFormat::kPrettyPrint:
-        PrettyPrint(output, out);
-        break;
-      case bloaty::OutputFormat::kCSV:
-        PrintToCSV(output, out, /*tabs=*/false);
-        break;
-      case bloaty::OutputFormat::kTSV:
-        PrintToCSV(output, out, /*tabs=*/true);
-        break;
-      default:
-        BLOATY_UNREACHABLE();
-    }
-  }
-
-  if (!disassembly_.empty()) {
-    *out << disassembly_;
-  }
+void RollupOutput::PrintToCSVPivot(std::ostream* out, bool tabs) const {
+  THROW("not yet implemented");
 }
 
 // RangeMap ////////////////////////////////////////////////////////////////////
@@ -2044,8 +2055,13 @@ bool DoParseOptions(bool skip_unknown, int* argc, char** argv[],
     }
   }
 
-  if (output_options->pivot && output_options->show == ShowDomain::kShowBoth) {
-    THROWF("--pivot requires --domain=vm or --domain=file");
+  if (output_options->pivot) {
+    if (output_options->show == ShowDomain::kShowBoth) {
+      THROWF("--pivot requires --domain=vm or --domain=file");
+    }
+    if (options->data_source_size() != 2) {
+      THROWF("--pivot (currently) requires exactly two data sources");
+    }
   }
 
   if (options->data_source_size() == 0 &&

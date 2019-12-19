@@ -478,18 +478,34 @@ struct RollupOutput {
 
   void Print(const OutputOptions& options, std::ostream* out) {
     if (!source_names_.empty()) {
-      switch (options.output_format) {
-        case bloaty::OutputFormat::kPrettyPrint:
-          PrettyPrint(options, out);
-          break;
-        case bloaty::OutputFormat::kCSV:
-          PrintToCSV(out, /*tabs=*/false);
-          break;
-        case bloaty::OutputFormat::kTSV:
-          PrintToCSV(out, /*tabs=*/true);
-          break;
-        default:
-          BLOATY_UNREACHABLE();
+      if (options.pivot) {
+        switch (options.output_format) {
+          case bloaty::OutputFormat::kPrettyPrint:
+            PrettyPrintPivot(options, out);
+            break;
+          case bloaty::OutputFormat::kCSV:
+            PrintToCSVPivot(out, /*tabs=*/false);
+            break;
+          case bloaty::OutputFormat::kTSV:
+            PrintToCSVPivot(out, /*tabs=*/true);
+            break;
+          default:
+            BLOATY_UNREACHABLE();
+        }
+      } else {
+        switch (options.output_format) {
+          case bloaty::OutputFormat::kPrettyPrint:
+            PrettyPrint(options, out);
+            break;
+          case bloaty::OutputFormat::kCSV:
+            PrintToCSV(out, /*tabs=*/false);
+            break;
+          case bloaty::OutputFormat::kTSV:
+            PrintToCSV(out, /*tabs=*/true);
+            break;
+          default:
+            BLOATY_UNREACHABLE();
+        }
       }
     }
 
@@ -516,16 +532,35 @@ struct RollupOutput {
   RollupRow toplevel_row_;
   std::string disassembly_;
 
+  struct StatPair {
+    StatPair(const std::string& percent_, const std::string& bytes_)
+        : percent(percent_), bytes(bytes_) {}
+    std::string percent;
+    std::string bytes;
+  };
+
   // When we are in diff mode, rollup sizes are relative to the baseline.
   bool diff_mode_ = false;
 
   static bool IsSame(const std::string& a, const std::string& b);
+  void PrettyPrintValues(size_t indent, const std::vector<std::string>& values,
+                         absl::string_view label,
+                         const std::vector<std::string>& cols,
+                         std::ostream* out) const;
+  void PrintHeader(const std::vector<std::string> cols,
+                   std::ostream* out) const;
   void PrettyPrint(const OutputOptions& options, std::ostream* out) const;
   void PrintToCSV(std::ostream* out, bool tabs) const;
+  void PrettyPrintPivot(const OutputOptions& options, std::ostream* out) const;
+  void PrintToCSVPivot(std::ostream* out, bool tabs) const;
   void PrettyPrintRow(const RollupRow& row, size_t indent,
-                      const OutputOptions& options, std::ostream* out) const;
+                      const OutputOptions& options,
+                      const std::vector<std::string>& cols,
+                      std::ostream* out) const;
   void PrettyPrintTree(const RollupRow& row, size_t indent,
-                       const OutputOptions& options, std::ostream* out) const;
+                       const OutputOptions& options,
+                       const std::vector<std::string>& cols,
+                       std::ostream* out) const;
   void PrintRowToCSV(const RollupRow& row,
                      std::vector<std::string> parent_labels,
                      std::ostream* out, bool tabs) const;
