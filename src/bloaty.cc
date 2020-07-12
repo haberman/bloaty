@@ -342,10 +342,16 @@ class Rollup {
     RollupRow* row = &output->toplevel_row_;
     row->vmsize = vm_total_;
     row->filesize = file_total_;
+    row->filtered_vmsize = filtered_vm_total_;
+    row->filtered_filesize = filtered_file_total_;
     row->vmpercent = 100;
     row->filepercent = 100;
     output->diff_mode_ = true;
     CreateRows(row, base, options, true);
+  }
+
+  void SetFilterRegex(const RE2* regex) {
+    filter_regex_ = regex;
   }
 
   // Subtract the values in "other" from this.
@@ -377,12 +383,17 @@ class Rollup {
   }
 
   int64_t file_total() const { return file_total_; }
+  int64_t filtered_file_total() const { return filtered_file_total_; }
 
  private:
   BLOATY_DISALLOW_COPY_AND_ASSIGN(Rollup);
 
   int64_t vm_total_ = 0;
   int64_t file_total_ = 0;
+  int64_t filtered_vm_total_ = 0;
+  int64_t filtered_file_total_ = 0;
+
+  const RE2* filter_regex_ = nullptr;
 
   // Putting Rollup by value seems to work on some compilers/libs but not
   // others.
@@ -401,11 +412,36 @@ class Rollup {
   // If there are more entries names[i+1, i+2, etc] add them to sub-rollups.
   void AddInternal(const std::vector<std::string>& names, size_t i,
                    uint64_t size, bool is_vmsize) {
+    if (filter_regex_ != nullptr) {
+      // filter_regex_ is only set in the root rollup, which checks the full
+      // label hierarchy for a match to determine whether a region should be
+      // considered.
+      bool any_matched = false;
+
+      for (const auto& name : names) {
+        if (RE2::PartialMatch(name, *filter_regex_)) {
+          any_matched = true;
+          break;
+        }
+      }
+
+      if (!any_matched) {
+        // Ignore this region in the rollup and don't visit sub-rollups.
+        if (is_vmsize) {
+          CheckedAdd(&filtered_vm_total_, size);
+        } else {
+          CheckedAdd(&filtered_file_total_, size);
+        }
+        return;
+      }
+    }
+
     if (is_vmsize) {
       CheckedAdd(&vm_total_, size);
     } else {
       CheckedAdd(&file_total_, size);
     }
+
     if (i < names.size()) {
       auto& child = children_[names[i]];
       if (child.get() == nullptr) {
@@ -415,7 +451,7 @@ class Rollup {
     }
   }
 
-  static double Percent(ssize_t part, size_t whole) {
+  static double Percent(int64_t part, int64_t whole) {
     if (whole == 0) {
       if (part == 0) {
         return NAN;
@@ -655,7 +691,7 @@ std::string DoubleStringPrintf(const char *fmt, double d) {
   return std::string(buf);
 }
 
-std::string SiPrint(ssize_t size, bool force_sign) {
+std::string SiPrint(int64_t size, bool force_sign) {
   const char *prefixes[] = {"", "Ki", "Mi", "Gi", "Ti"};
   size_t num_prefixes = 5;
   size_t n = 0;
@@ -668,7 +704,7 @@ std::string SiPrint(ssize_t size, bool force_sign) {
   std::string ret;
 
   if (fabs(size_d) > 100 || n == 0) {
-    ret = std::to_string(static_cast<ssize_t>(size_d)) + prefixes[n];
+    ret = std::to_string(static_cast<int64_t>(size_d)) + prefixes[n];
     if (force_sign && size > 0) {
       ret = "+" + ret;
     }
@@ -738,7 +774,17 @@ void RollupOutput::PrettyPrintRow(const RollupRow& row, size_t indent,
                                   const OutputOptions& options,
                                   const std::vector<std::string>& cols,
                                   std::ostream* out) const {
+  if (&row != &toplevel_row_) {
+    // Avoid printing this row if it is only zero.
+    // This can happen when using --domain if the row is zero for this domain.
+    if ((!ShowFile(options) && row.vmsize == 0) ||
+        (!ShowVM(options) && row.filesize == 0)) {
+      return;
+    }
+  }
+
   std::vector<std::string> values;
+
   *out << FixedWidthString("", indent) << " ";
 
   if (ShowFile(options)) {
@@ -821,6 +867,32 @@ void RollupOutput::PrettyPrint(const OutputOptions& options,
 
   // The "TOTAL" row comes after all other rows.
   PrettyPrintRow(toplevel_row_, 0, options, cols, out);
+
+  uint64_t file_filtered = 0;
+  uint64_t vm_filtered = 0;
+  if (ShowFile(options)) {
+    file_filtered = toplevel_row_.filtered_filesize;
+  }
+  if (ShowVM(options)) {
+    vm_filtered = toplevel_row_.filtered_vmsize;
+  }
+
+  if (vm_filtered == 0 && file_filtered == 0) {
+    return;
+  }
+
+  *out << "Filtering enabled (source_filter); omitted";
+
+  if (file_filtered > 0 && vm_filtered > 0) {
+    *out << " file =" << SiPrint(file_filtered, /*force_sign=*/false)
+         << ", vm =" << SiPrint(vm_filtered, /*force_sign=*/false);
+  } else if (file_filtered > 0) {
+    *out << SiPrint(file_filtered, /*force_sign=*/false);
+  } else {
+    *out << SiPrint(vm_filtered, /*force_sign=*/false);
+  }
+
+   *out << " of entries\n";
 }
 
 void RollupOutput::PrettyPrintPivot(const OutputOptions& options,
@@ -911,7 +983,7 @@ void RollupOutput::PrintToCSV(std::ostream* out, bool tabs) const {
   }
 }
 
-void RollupOutput::PrintToCSVPivot(std::ostream* out, bool tabs) const {
+void RollupOutput::PrintToCSVPivot(std::ostream* /*out*/, bool /*tabs*/) const {
   THROW("not yet implemented");
 }
 
@@ -1384,11 +1456,13 @@ class Bloaty {
     }
   }
 
-  void ScanAndRollupFiles(const std::vector<std::unique_ptr<ObjectFile>>& files,
+  void ScanAndRollupFiles(const std::vector<std::string>& filenames,
                           std::vector<std::string>* build_ids,
                           Rollup* rollup) const;
-  void ScanAndRollupFile(ObjectFile* file, Rollup* rollup,
-                         std::string* out_build_id) const;
+  void ScanAndRollupFile(const std::string& filename, Rollup* rollup,
+                         std::vector<std::string>* out_build_ids) const;
+
+  std::unique_ptr<ObjectFile> GetObjectFile(const std::string& filename) const;
 
   const InputFileFactory& file_factory_;
   const Options options_;
@@ -1403,9 +1477,13 @@ class Bloaty {
   std::vector<ConfiguredDataSource*> sources_;
   std::vector<std::string> source_names_;
 
-  std::vector<std::unique_ptr<ObjectFile>> input_files_;
-  std::vector<std::unique_ptr<ObjectFile>> base_files_;
-  std::map<std::string, std::unique_ptr<ObjectFile>> debug_files_;
+  struct InputFileInfo {
+    std::string filename_;
+    std::string build_id_;
+  };
+  std::vector<InputFileInfo> input_files_;
+  std::vector<InputFileInfo> base_files_;
+  std::map<std::string, std::string> debug_files_;
 };
 
 Bloaty::Bloaty(const InputFileFactory& factory, const Options& options)
@@ -1413,7 +1491,8 @@ Bloaty::Bloaty(const InputFileFactory& factory, const Options& options)
   AddBuiltInSources(data_sources, options);
 }
 
-void Bloaty::AddFilename(const std::string& filename, bool is_base) {
+std::unique_ptr<ObjectFile> Bloaty::GetObjectFile(
+    const std::string& filename) const {
   std::unique_ptr<InputFile> file(file_factory_.OpenFile(filename));
   auto object_file = TryOpenELFFile(file);
 
@@ -1429,31 +1508,28 @@ void Bloaty::AddFilename(const std::string& filename, bool is_base) {
     THROWF("unknown file type for file '$0'", filename.c_str());
   }
 
+  return object_file;
+}
+
+void Bloaty::AddFilename(const std::string& filename, bool is_base) {
+  auto object_file = GetObjectFile(filename);
+  std::string build_id = object_file->GetBuildId();
+
   if (is_base) {
-    base_files_.push_back(std::move(object_file));
+    base_files_.push_back({filename, build_id});
   } else {
-    input_files_.push_back(std::move(object_file));
+    input_files_.push_back({filename, build_id});
   }
 }
 
 void Bloaty::AddDebugFilename(const std::string& filename) {
-  std::unique_ptr<InputFile> file(file_factory_.OpenFile(filename));
-  auto object_file = TryOpenELFFile(file);
-
-  if (!object_file.get()) {
-    object_file = TryOpenMachOFile(file);
-  }
-
-  if (!object_file.get()) {
-    THROWF("unknown file type for file '$0'", filename);
-  }
-
+  auto object_file = GetObjectFile(filename);
   std::string build_id = object_file->GetBuildId();
   if (build_id.size() == 0) {
     THROWF("File '$0' has no build ID, cannot be used as a debug file",
            filename);
   }
-  debug_files_[build_id] = std::move(object_file);
+  debug_files_[build_id] = filename;
 }
 
 void Bloaty::DefineCustomDataSource(const CustomDataSource& source) {
@@ -1506,6 +1582,10 @@ struct DualMaps {
   }
 
   void ComputeRollup(Rollup* rollup) {
+    for (auto& map : maps_) {
+      map->vm_map.Compress();
+      map->file_map.Compress();
+    }
     RangeMap::ComputeRollup(VmMaps(), [=](const std::vector<std::string>& keys,
                                           uint64_t addr, uint64_t end) {
       return rollup->AddSizes(keys, end - addr, true);
@@ -1519,14 +1599,17 @@ struct DualMaps {
 
   void PrintMaps(const std::vector<const RangeMap*> maps) {
     uint64_t last = 0;
+    uint64_t max = maps[0]->GetMaxAddress();
+    int hex_digits = std::ceil(std::log2(max) / 4);
     RangeMap::ComputeRollup(maps, [&](const std::vector<std::string>& keys,
                                       uint64_t addr, uint64_t end) {
       if (addr > last) {
-        PrintMapRow("NO ENTRY", last, addr);
+        PrintMapRow("[-- Nothing mapped --]", last, addr, hex_digits);
       }
-      PrintMapRow(KeysToString(keys), addr, end);
+      PrintMapRow(KeysToString(keys), addr, end, hex_digits);
       last = end;
     });
+    printf("\n");
   }
 
   void PrintFileMaps() { PrintMaps(FileMaps()); }
@@ -1535,9 +1618,10 @@ struct DualMaps {
   std::string KeysToString(const std::vector<std::string>& keys) {
     std::string ret;
 
-    for (size_t i = 0; i < keys.size(); i++) {
-      if (i > 0) {
-        ret += ", ";
+    // Start at offset 1 to skip the base map.
+    for (size_t i = 1; i < keys.size(); i++) {
+      if (i > 1) {
+        ret += "\t";
       }
       ret += keys[i];
     }
@@ -1545,9 +1629,10 @@ struct DualMaps {
     return ret;
   }
 
-  void PrintMapRow(string_view str, uint64_t start, uint64_t end) {
-    printf("[%" PRIx64 ", %" PRIx64 "] %.*s\n", start, end, (int)str.size(),
-           str.data());
+  void PrintMapRow(string_view str, uint64_t start, uint64_t end, int hex_digits) {
+    printf("%.*" PRIx64 "-%.*" PRIx64 "\t %s\t\t%.*s\n", hex_digits, start,
+           hex_digits, end, LeftPad(std::to_string(end - start), 10).c_str(),
+           (int)str.size(), str.data());
   }
 
   DualMap* base_map() { return maps_[0].get(); }
@@ -1572,8 +1657,10 @@ struct DualMaps {
   std::vector<std::unique_ptr<DualMap>> maps_;
 };
 
-void Bloaty::ScanAndRollupFile(ObjectFile* file, Rollup* rollup,
-                               std::string* out_build_id) const {
+void Bloaty::ScanAndRollupFile(const std::string &filename, Rollup* rollup,
+                               std::vector<std::string>* out_build_ids) const {
+  auto file = GetObjectFile(filename);
+
   DualMaps maps;
   std::vector<std::unique_ptr<RangeSink>> sinks;
   std::vector<RangeSink*> sink_ptrs;
@@ -1603,16 +1690,19 @@ void Bloaty::ScanAndRollupFile(ObjectFile* file, Rollup* rollup,
     }
   }
 
+  std::unique_ptr<ObjectFile> debug_file;
   std::string build_id = file->GetBuildId();
   if (!build_id.empty()) {
     auto iter = debug_files_.find(build_id);
     if (iter != debug_files_.end()) {
-      file->set_debug_file(iter->second.get());
-      *out_build_id = build_id;
+      debug_file = GetObjectFile(iter->second);
+      file->set_debug_file(debug_file.get());
+      out_build_ids->push_back(build_id);
     }
   }
 
-  int64_t filesize_before = rollup->file_total();
+  int64_t filesize_before = rollup->file_total() +
+      rollup->filtered_file_total();
   file->ProcessFile(sink_ptrs);
 
   // kInputFile source: Copy the base map to the filename sink(s).
@@ -1655,7 +1745,8 @@ void Bloaty::ScanAndRollupFile(ObjectFile* file, Rollup* rollup,
   maps.ComputeRollup(rollup);
 
   // The ObjectFile implementation must guarantee this.
-  int64_t filesize = rollup->file_total() - filesize_before;
+  int64_t filesize = rollup->file_total() +
+      rollup->filtered_file_total() - filesize_before;
   (void)filesize;
   assert(filesize == file->file_data().data().size());
 
@@ -1668,27 +1759,34 @@ void Bloaty::ScanAndRollupFile(ObjectFile* file, Rollup* rollup,
 }
 
 void Bloaty::ScanAndRollupFiles(
-    const std::vector<std::unique_ptr<ObjectFile>>& files,
+    const std::vector<std::string>& filenames,
     std::vector<std::string>* build_ids,
     Rollup * rollup) const {
   int num_cpus = std::thread::hardware_concurrency();
-  int num_threads = std::min(num_cpus, static_cast<int>(files.size()));
+  int num_threads = std::min(num_cpus, static_cast<int>(filenames.size()));
 
   struct PerThreadData {
     Rollup rollup;
-    std::string build_id;
+    std::vector<std::string> build_ids;
   };
 
   std::vector<PerThreadData> thread_data(num_threads);
   std::vector<std::thread> threads(num_threads);
-  ThreadSafeIterIndex index(files.size());
+  ThreadSafeIterIndex index(filenames.size());
+
+  std::unique_ptr<RE2> regex = nullptr;
+  if (options_.has_source_filter()) {
+    regex = absl::make_unique<RE2>(options_.source_filter());
+  }
 
   for (int i = 0; i < num_threads; i++) {
-    threads[i] = std::thread([this, &index, &files](PerThreadData* data) {
+    thread_data[i].rollup.SetFilterRegex(regex.get());
+
+    threads[i] = std::thread([this, &index, &filenames](PerThreadData* data) {
       try {
         int j;
         while (index.TryGetNext(&j)) {
-          ScanAndRollupFile(files[j].get(), &data->rollup, &data->build_id);
+          ScanAndRollupFile(filenames[j], &data->rollup, &data->build_ids);
         }
       } catch (const bloaty::Error& e) {
         index.Abort(e.what());
@@ -1705,9 +1803,9 @@ void Bloaty::ScanAndRollupFiles(
       rollup->Add(data->rollup);
     }
 
-    if (!data->build_id.empty()) {
-      build_ids->push_back(data->build_id);
-    }
+    build_ids->insert(build_ids->end(),
+                      data->build_ids.begin(),
+                      data->build_ids.end());
   }
 
   std::string error;
@@ -1727,11 +1825,19 @@ void Bloaty::ScanAndRollup(const Options& options, RollupOutput* output) {
 
   Rollup rollup;
   std::vector<std::string> build_ids;
-  ScanAndRollupFiles(input_files_, &build_ids, &rollup);
+  std::vector<std::string> input_filenames;
+  for (const auto& file_info : input_files_) {
+    input_filenames.push_back(file_info.filename_);
+  }
+  ScanAndRollupFiles(input_filenames, &build_ids, &rollup);
 
   if (!base_files_.empty()) {
     Rollup base;
-    ScanAndRollupFiles(base_files_, &build_ids, &base);
+    std::vector<std::string> base_filenames;
+    for (const auto& file_info : base_files_) {
+      base_filenames.push_back(file_info.filename_);
+    }
+    ScanAndRollupFiles(base_filenames, &build_ids, &base);
     rollup.Subtract(base);
     rollup.CreateDiffModeRollupOutput(&base, options, output);
   } else {
@@ -1749,19 +1855,19 @@ void Bloaty::ScanAndRollup(const Options& options, RollupOutput* output) {
     for (const auto& pair : debug_files_) {
       unused_debug += absl::Substitute(
           "$0   $1\n",
-          absl::BytesToHexString(pair.second->GetBuildId()).c_str(),
-          pair.second->file_data().filename().c_str());
+          absl::BytesToHexString(pair.first).c_str(),
+          pair.second.c_str());
     }
 
-    for (const auto& file : input_files_) {
+    for (const auto& file_info : input_files_) {
       input_files += absl::Substitute(
-          "$0   $1\n", absl::BytesToHexString(file->GetBuildId()).c_str(),
-          file->file_data().filename().c_str());
+          "$0   $1\n", absl::BytesToHexString(file_info.build_id_).c_str(),
+          file_info.filename_.c_str());
     }
-    for (const auto& file : base_files_) {
+    for (const auto& file_info : base_files_) {
       input_files += absl::Substitute(
-          "$0   $1\n", absl::BytesToHexString(file->GetBuildId()).c_str(),
-          file->file_data().filename().c_str());
+          "$0   $1\n", absl::BytesToHexString(file_info.build_id_).c_str(),
+          file_info.filename_.c_str());
     }
     THROWF(
         "Debug file(s) did not match any input file:\n$0\nInput Files:\n$1",
@@ -1772,7 +1878,8 @@ void Bloaty::ScanAndRollup(const Options& options, RollupOutput* output) {
 void Bloaty::DisassembleFunction(string_view function, const Options& options,
                                  RollupOutput* output) {
   DisassemblyInfo info;
-  for (auto& file : input_files_) {
+  for (const auto& file_info : input_files_) {
+    auto file = GetObjectFile(file_info.filename_);
     if (file->GetDisassemblyInfo(function, EffectiveSymbolSource(options),
                                  &info)) {
       output->SetDisassembly(::bloaty::DisassembleFunction(info));
@@ -1821,6 +1928,8 @@ Options:
   -w                 Wide output; don't truncate long labels.
   --help             Display this message and exit.
   --list-sources     Show a list of available sources and exit.
+  --source-filter=PATTERN
+                     Only show keys with names matching this pattern.
 
 Options for debugging Bloaty:
 
@@ -2020,6 +2129,8 @@ bool DoParseOptions(bool skip_unknown, int* argc, char** argv[],
       } else {
         THROWF("unknown value for -s: $0", option);
       }
+    } else if (args.TryParseOption("--source-filter", &option)) {
+      options->set_source_filter(std::string(option));
     } else if (args.TryParseFlag("-v")) {
       options->set_verbose_level(1);
     } else if (args.TryParseFlag("-vv")) {
@@ -2038,7 +2149,7 @@ bool DoParseOptions(bool skip_unknown, int* argc, char** argv[],
       puts(usage);
       return false;
     } else if (args.TryParseFlag("--version")) {
-      printf("Bloaty McBloatface 1.0\n");
+      printf("Bloaty McBloatface 1.1\n");
       exit(0);
     } else if (absl::StartsWith(args.Arg(), "-")) {
       if (skip_unknown) {
@@ -2128,6 +2239,13 @@ void BloatyDoMain(const Options& options, const InputFileFactory& file_factory,
 
   for (const auto& data_source : options.data_source()) {
     bloaty.AddDataSource(data_source);
+  }
+
+  if (options.has_source_filter()) {
+    RE2 re(options.source_filter());
+    if (!re.ok()) {
+      THROW("invalid regex for source_filter");
+    }
   }
 
   verbose_level = options.verbose_level();

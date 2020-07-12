@@ -23,6 +23,7 @@
 #define __STDC_LIMIT_MACROS
 #define __STDC_FORMAT_MACROS
 #include <stdint.h>
+#include <inttypes.h>
 
 #include <memory>
 #include <set>
@@ -431,6 +432,8 @@ struct RollupRow {
   std::string name;
   int64_t vmsize = 0;
   int64_t filesize = 0;
+  int64_t filtered_vmsize = 0;
+  int64_t filtered_filesize = 0;
   int64_t other_count = 0;
   int64_t sortkey;
   double vmpercent;
