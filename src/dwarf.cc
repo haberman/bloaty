@@ -2049,13 +2049,22 @@ static void ReadDWARFDebugInfo(
       attr_reader.ReadAttributes(&die_reader, &die);
 
       // low_pc == 0 is a signal that this routine was stripped out of the
-      // final binary.  Skip this DIE and all of its children.
-      if (die.has_low_pc() && die.low_pc() == 0) {
-        die_reader.SkipChildren();
-      } else {
-        AddDIE(file, compileunit_name, die, symtab, symbol_map,
-               die_reader.unit_sizes(), sink);
-      }
+      // final binary. We used to skip such DIEs and all of their children,
+      // but we no longer do because they may have been inlined and sub-DIEs
+      // may still point to variables that were inlined elsewhere, for example:
+      //   <1><17a02>: Abbrev Number: 2 (DW_TAG_subprogram)
+      //      <17a03>   DW_AT_low_pc      : 0x0
+      //      <17a0b>   DW_AT_high_pc     : 0x5e
+      //      <17a0f>   DW_AT_frame_base  : 1 byte block: 56      (DW_OP_reg6 (rbp))
+      //      <17a11>   DW_AT_abstract_origin: <0x18892>
+      //   <2><17a15>: Abbrev Number: 3 (DW_TAG_variable)
+      //      <17a16>   DW_AT_name        : (indirect string, offset: 0x779e): utf8_offset
+      //      <17a1a>   DW_AT_type        : <0x17a53>
+      //      <17a1e>   DW_AT_decl_file   : 3
+      //      <17a1f>   DW_AT_decl_line   : 159
+      //      <17a20>   DW_AT_location    : 9 byte block: 3 b0 25 42 0 0 0 0 0    (DW_OP_addr: 4225b0)
+      AddDIE(file, compileunit_name, die, symtab, symbol_map,
+             die_reader.unit_sizes(), sink);
     }
   } while (die_reader.NextCompilationUnit());
 }
