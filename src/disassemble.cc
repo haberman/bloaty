@@ -80,24 +80,25 @@ void DisassembleFindReferences(const DisassemblyInfo& info, RangeSink* sink) {
     size_t count = in->detail->x86.op_count;
     for (size_t i = 0; i < count; i++) {
       cs_x86_op* op = &in->detail->x86.operands[i];
-      if (op->type == X86_OP_MEM && op->mem.base == X86_REG_RIP &&
-          op->mem.segment == X86_REG_INVALID &&
-          op->mem.index == X86_REG_INVALID) {
-        // RIP-relative instruction like
-        //   lea    rsi,[rip+0x1522a]
-        // This is a position-independent data reference.
-        uint64_t to_address = in->address + in->size + op->mem.disp;
-        if (to_address) {
-          sink->AddVMRangeForVMAddr("x86_disassemble", in->address, to_address,
-                                    RangeSink::kUnknownSize);
+      if (op->type == X86_OP_MEM) {
+        if (op->mem.base == X86_REG_RIP) {
+          // RIP-relative instruction like
+          //   lea    rsi,[rip+0x1522a]
+          // This is a position-independent data reference.
+          uint64_t to_address = in->address + in->size + op->mem.disp;
+          sink->MaybeAddVMReference("x86_disassemble", in->address, to_address);
+        } else if (op->mem.disp) {
+          // Instruction with displacement, which might possibly represent an
+          // address.
+          //   jmp    QWORD PTR [rax*8+0x413060]
+          sink->MaybeAddVMReference("x86_disassemble", in->address, op->mem.disp);
         }
       } else if (op->type == X86_OP_IMM) {
         // Absolute operand instruction like
         //   mov    esi,0x426020
         // If the absolute operand is in the range of mapped VM space, it's
         // likely that it's an address.
-        sink->AddVMRangeForVMAddr("x86_disassemble", in->address, op->imm,
-                                  RangeSink::kUnknownSize);
+        sink->MaybeAddVMReference("x86_disassemble", in->address, op->imm);
       }
     }
   }

@@ -1168,6 +1168,27 @@ void RangeSink::AddVMRangeForVMAddr(const char* analyzer,
   }
 }
 
+void RangeSink::MaybeAddVMReference(const char* analyzer, uint64_t from_vmaddr,
+                                    uint64_t to_vmaddr) {
+  bool verbose = IsVerboseForVMRange(to_vmaddr, RangeMap::kUnknownSize);
+  if (verbose) {
+    printf("[%s, %s] MaybeAddVMReference(%" PRIx64 ", %" PRIx64 ")\n",
+           GetDataSourceLabel(data_source_), analyzer, from_vmaddr, to_vmaddr);
+  }
+  assert(translator_);
+  for (auto& pair : outputs_) {
+    std::string label;
+    if (pair.first->vm_map.TryGetLabel(from_vmaddr, &label)) {
+      bool ok = pair.first->vm_map.AddRangeWithTranslation(
+          to_vmaddr, RangeMap::kUnknownSize, label, translator_->vm_map,
+          verbose, &pair.first->file_map);
+      (void)ok;  // We don't care if it fails.
+    } else if (verbose_level > 2) {
+      printf("No label found for vmaddr %" PRIx64 "\n", from_vmaddr);
+    }
+  }
+}
+
 void RangeSink::AddVMRange(const char* analyzer, uint64_t vmaddr,
                            uint64_t vmsize, const std::string& name) {
   bool verbose = IsVerboseForVMRange(vmaddr, vmsize);

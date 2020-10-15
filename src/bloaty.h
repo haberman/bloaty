@@ -173,6 +173,13 @@ class RangeSink {
   void AddVMRangeForVMAddr(const char* analyzer, uint64_t label_from_vmaddr,
                            uint64_t addr, uint64_t size);
 
+  // Try to add a reference from_vmaddr -> to_vmaddr, but don't throw errors
+  // or warnings if either of the addresses is not mapped. This function is
+  // useful if the reference is somewhat heuristic in nature, like finding
+  // a possible address immediate in a disassembled instruction.
+  void MaybeAddVMReference(const char* analyzer, uint64_t from_vmaddr,
+                           uint64_t to_vmaddr);
+
   // Applies this label from |from_file_range| to |file_range|, but only if the
   // entire |from_file_range| has a single label.  If not, this does nothing.
   void AddFileRangeForFileRange(const char* analyzer,
