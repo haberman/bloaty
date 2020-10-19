@@ -883,12 +883,9 @@ static void ReadElfArchMode(const InputFile& file, cs_arch* arch, cs_mode* mode)
              });
 }
 
-static void ReadELFSymbols(const InputFile& file, RangeSink* sink,
-                           SymbolTable* table, bool disassemble) {
+template <class Func>
+void ForEachSymbol(const InputFile& file, RangeSink* sink, Func&& func) {
   bool is_object = IsObjectFile(file.data());
-  DisassemblyInfo info;
-  DisassemblyInfo* infop = &info;
-  ReadElfArchMode(file, &info.arch, &info.mode);
 
   ForEachElf(
       file, sink,
@@ -896,11 +893,7 @@ static void ReadELFSymbols(const InputFile& file, RangeSink* sink,
         for (Elf64_Xword i = 1; i < elf.section_count(); i++) {
           ElfFile::Section section;
           elf.ReadSection(i, &section);
-
-          if (section.header().sh_type != SHT_SYMTAB) {
-            continue;
-          }
-
+          if (section.header().sh_type != SHT_SYMTAB) continue;
           Elf64_Word symbol_count = section.GetEntryCount();
 
           // Find the corresponding section where the strings for the symbol
@@ -913,16 +906,9 @@ static void ReadELFSymbols(const InputFile& file, RangeSink* sink,
 
           for (Elf64_Word i = 1; i < symbol_count; i++) {
             Elf64_Sym sym;
-
             section.ReadSymbol(i, &sym, nullptr);
-
-            if (ELF64_ST_TYPE(sym.st_info) == STT_SECTION) {
-              continue;
-            }
-
-            if (sym.st_shndx == STN_UNDEF) {
-              continue;
-            }
+            if (ELF64_ST_TYPE(sym.st_info) == STT_SECTION) continue;
+            if (sym.st_shndx == STN_UNDEF) continue;
 
             if (sym.st_size == 0) {
               // Maybe try to refine?  See ReadELFSectionsRefineSymbols below.
@@ -932,25 +918,42 @@ static void ReadELFSymbols(const InputFile& file, RangeSink* sink,
             string_view name = strtab_section.ReadString(sym.st_name);
             uint64_t full_addr =
                 ToVMAddr(sym.st_value, index_base + sym.st_shndx, is_object);
-            if (sink && !disassemble) {
-              sink->AddVMRangeAllowAlias(
-                  "elf_symbols", full_addr, sym.st_size,
-                  ItaniumDemangle(name, sink->data_source()));
-            }
-            if (table) {
-              table->insert(
-                  std::make_pair(name, std::make_pair(full_addr, sym.st_size)));
-            }
-            if (disassemble && ELF64_ST_TYPE(sym.st_info) == STT_FUNC) {
-              if (verbose_level > 1) {
-                printf("Disassembling function: %s\n", name.data());
-              }
-              infop->text = sink->TranslateVMToFile(full_addr).substr(0, sym.st_size);
-              infop->start_address = full_addr;
-              DisassembleFindReferences(*infop, sink);
-            }
+
+            func(name, full_addr, sym);
           }
         }
+      });
+}
+
+void PopulateSymbolTable(const InputFile& file, SymbolTable* table) {
+  ForEachSymbol(
+      file, nullptr, [=](string_view name, uint64_t full_addr, Elf64_Sym sym) {
+        table->insert(
+            std::make_pair(name, std::make_pair(full_addr, sym.st_size)));
+      });
+}
+
+void AddSymbolTable(const InputFile& file, RangeSink* sink) {
+  ForEachSymbol(
+      file, sink, [=](string_view name, uint64_t full_addr, Elf64_Sym sym) {
+        sink->AddVMRangeAllowAlias("elf_symbols", full_addr, sym.st_size,
+                                   ItaniumDemangle(name, sink->data_source()));
+      });
+}
+
+void DisassembleFunctions(const InputFile& file, RangeSink* sink) {
+  DisassemblyInfo info;
+  DisassemblyInfo* infop = &info;
+  ReadElfArchMode(file, &info.arch, &info.mode);
+  ForEachSymbol(
+      file, nullptr, [=](string_view name, uint64_t full_addr, Elf64_Sym sym) {
+        if (ELF64_ST_TYPE(sym.st_info) != STT_FUNC) return;
+        if (verbose_level > 1) {
+          printf("Disassembling function: %s\n", name.data());
+        }
+        infop->text = sink->TranslateVMToFile(full_addr).substr(0, sym.st_size);
+        infop->start_address = full_addr;
+        DisassembleFindReferences(*infop, sink);
       });
 }
 
@@ -1015,7 +1018,7 @@ static void ReadELFTables(const InputFile& file, RangeSink* sink) {
 
   // Disassemble first, because sometimes other tables will refer to things we
   // discovered through disassembling.
-  ReadELFSymbols(file, sink, nullptr, true);
+  DisassembleFunctions(file, sink);
 
   // Now scan other tables.
   ForEachElf(file, sink,
@@ -1245,7 +1248,16 @@ static void ReadDWARFSections(const InputFile& file, dwarf::File* dwarf) {
   }
 }
 
-void AddCatchAll(RangeSink* sink) {
+void AddCatchAll(const InputFile& file, RangeSink* sink) {
+  if (sink->data_source() == DataSource::kCompileUnits) {
+    // Use symbols to cut any regions of unknown size.
+    ForEachSymbol(
+        file, nullptr,
+        [=](string_view /* name */, uint64_t full_addr, Elf64_Sym /* sym */) {
+          sink->BoundUnknownRegions(full_addr);
+        });
+  }
+
   // The last-line fallback to make sure we cover the entire VM space.
   if (sink->data_source() != DataSource::kSegments) {
     DoReadELFSections(sink, kReportByEscapedSectionName);
@@ -1310,7 +1322,7 @@ class ElfObjectFile : public ObjectFile {
         case DataSource::kRawSymbols:
         case DataSource::kShortSymbols:
         case DataSource::kFullSymbols:
-          ReadELFSymbols(debug_file().file_data(), sink, nullptr, false);
+          AddSymbolTable(debug_file().file_data(), sink);
           break;
         case DataSource::kArchiveMembers:
           DoReadELFSections(sink, kReportByArchiveMember);
@@ -1318,18 +1330,10 @@ class ElfObjectFile : public ObjectFile {
         case DataSource::kCompileUnits: {
           CheckNotObject("compileunits", sink);
           SymbolTable symtab;
-          DualMap symbol_map;
-          NameMunger empty_munger;
-          RangeSink symbol_sink(&debug_file().file_data(),
-                                sink->options(),
-                                DataSource::kRawSymbols,
-                                &sinks[0]->MapAtIndex(0));
-          symbol_sink.AddOutput(&symbol_map, &empty_munger);
-          ReadELFSymbols(debug_file().file_data(), &symbol_sink, &symtab,
-                         false);
+          PopulateSymbolTable(debug_file().file_data(), &symtab);
           dwarf::File dwarf;
           ReadDWARFSections(debug_file().file_data(), &dwarf);
-          ReadDWARFCompileUnits(dwarf, symtab, symbol_map, sink);
+          ReadDWARFCompileUnits(dwarf, symtab, sink);
           break;
         }
         case DataSource::kInlines: {
@@ -1355,7 +1359,7 @@ class ElfObjectFile : public ObjectFile {
           break;
       }
 
-      AddCatchAll(sink);
+      AddCatchAll(debug_file().file_data(), sink);
     }
   }
 
@@ -1380,11 +1384,7 @@ class ElfObjectFile : public ObjectFile {
 
     // Could optimize this not to build the whole table if necessary.
     SymbolTable symbol_table;
-    RangeSink symbol_sink(&file_data(), bloaty::Options(), symbol_source,
-                          &base_map);
-    symbol_sink.AddOutput(&info->symbol_map, &empty_munger);
-    ReadELFSymbols(debug_file().file_data(), &symbol_sink, &symbol_table,
-                   false);
+    PopulateSymbolTable(debug_file().file_data(), &symbol_table);
 
     if (symbol) {
       auto entry = symbol_table.find(*symbol);

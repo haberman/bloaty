@@ -74,6 +74,12 @@ class RangeMap {
                                const RangeMap& translator, bool verbose,
                                RangeMap* other);
 
+  // If any existing region with unknown size intersects this address, the size
+  // will be adjusted down to end at this address. This is useful when one data
+  // source (eg. symbols) can give us a clear signal that other data sources
+  // (eg.  compileunits) should not automatically span this address.
+  void BoundUnknownRegions(uint64_t addr);
+
   // Collapses adjacent ranges with the same label. This reduces memory usage
   // and removes redundant noise from the output when dumping a full memory map
   // (in normal Bloaty output it makes no difference, because all labels with
@@ -239,6 +245,7 @@ class RangeMap {
   // Finds the entry that contains |addr|.  If no such mapping exists, returns
   // mappings_.end().
   Map::const_iterator FindContaining(uint64_t addr) const;
+  Map::iterator FindContaining(uint64_t addr);
 
   // Finds the entry that contains |addr|, or the very next entry (which may be
   // mappings_.end()).

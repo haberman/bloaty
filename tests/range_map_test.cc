@@ -245,6 +245,26 @@ TEST_F(RangeMapTest, UnknownSize4) {
   });
 }
 
+TEST_F(RangeMapTest, BoundUnknownRegions) {
+  map_.AddRange(100, kUnknownSize, "foo");
+  map_.BoundUnknownRegions(150);
+
+  CheckConsistency();
+  AssertMainMapEquals({
+    {100, 150, kNoTranslation, "foo"},
+  });
+}
+
+TEST_F(RangeMapTest, BoundUnknownRegions2) {
+  map_.AddRange(100, kUnknownSize, "foo");
+  map_.BoundUnknownRegions(100);
+
+  CheckConsistency();
+  AssertMainMapEquals({
+    {100, kUnknownSize, kNoTranslation, "foo"},
+  });
+}
+
 TEST_F(RangeMapTest, Bug1) {
   map_.AddRange(100, 20, "foo");
   map_.AddRange(120, 20, "bar");

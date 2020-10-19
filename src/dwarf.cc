@@ -1560,8 +1560,7 @@ class InlinesDIE {
 //   readelf --debug-dump=info foo.bin
 void AddDIE(const dwarf::File& file, const std::string& name,
             const GeneralDIE& die, const SymbolTable& symtab,
-            const DualMap& symbol_map, const dwarf::CompilationUnitSizes& sizes,
-            RangeSink* sink) {
+            const dwarf::CompilationUnitSizes& sizes, RangeSink* sink) {
   // Some DIEs mark address ranges with high_pc/low_pc pairs (especially
   // functions).
   if (die.has_low_pc() && die.has_high_pc() &&
@@ -1604,19 +1603,8 @@ void AddDIE(const dwarf::File& file, const std::string& name,
         BLOATY_UNREACHABLE();
       }
 
-      // Unfortunately the location doesn't include a size, so we look that part
-      // up in the symbol map.
-      uint64_t size;
-      if (symbol_map.vm_map.TryGetSize(addr, &size)) {
-        sink->AddVMRangeIgnoreDuplicate("dwarf_location", addr, size, name);
-      } else {
-        if (verbose_level > 0) {
-          fprintf(stderr,
-                  "bloaty: warning: couldn't find DWARF location in symbol "
-                  "table, address: %" PRIx64 ", name: %s\n",
-                  addr, name.c_str());
-        }
-      }
+      sink->AddVMRangeIgnoreDuplicate("dwarf_location", addr,
+                                      RangeSink::kUnknownSize, name);
     }
   }
 
@@ -1947,7 +1935,7 @@ static void ReadDWARFStmtListRange(const dwarf::File& file, uint64_t offset,
 // resolve to addresses.
 static void ReadDWARFDebugInfo(
     const dwarf::File& file, dwarf::DIEReader::Section section,
-    const SymbolTable& symtab, const DualMap& symbol_map, RangeSink* sink,
+    const SymbolTable& symtab, RangeSink* sink,
     std::unordered_map<uint64_t, std::string>* stmt_list_map) {
   dwarf::DIEReader die_reader(file);
   die_reader.set_strp_sink(sink);
@@ -2030,7 +2018,7 @@ static void ReadDWARFDebugInfo(
     die_reader.set_compileunit_name(compileunit_name);
     sink->AddFileRange("dwarf_debuginfo", compileunit_name,
                        die_reader.unit_range());
-    AddDIE(file, compileunit_name, compileunit_die, symtab, symbol_map,
+    AddDIE(file, compileunit_name, compileunit_die, symtab,
            die_reader.unit_sizes(), sink);
 
     if (compileunit_die.has_stmt_list()) {
@@ -2063,14 +2051,14 @@ static void ReadDWARFDebugInfo(
       //      <17a1e>   DW_AT_decl_file   : 3
       //      <17a1f>   DW_AT_decl_line   : 159
       //      <17a20>   DW_AT_location    : 9 byte block: 3 b0 25 42 0 0 0 0 0    (DW_OP_addr: 4225b0)
-      AddDIE(file, compileunit_name, die, symtab, symbol_map,
-             die_reader.unit_sizes(), sink);
+      AddDIE(file, compileunit_name, die, symtab, die_reader.unit_sizes(),
+             sink);
     }
   } while (die_reader.NextCompilationUnit());
 }
 
 void ReadDWARFCompileUnits(const dwarf::File& file, const SymbolTable& symtab,
-                           const DualMap& symbol_map, RangeSink* sink) {
+                           RangeSink* sink) {
   if (!file.debug_info.size()) {
     THROW("missing debug info");
   }
@@ -2080,10 +2068,10 @@ void ReadDWARFCompileUnits(const dwarf::File& file, const SymbolTable& symtab,
   }
 
   std::unordered_map<uint64_t, std::string> stmt_list_map;
-  ReadDWARFDebugInfo(file, dwarf::DIEReader::Section::kDebugInfo, symtab,
-                     symbol_map, sink, &stmt_list_map);
-  ReadDWARFDebugInfo(file, dwarf::DIEReader::Section::kDebugTypes, symtab,
-                     symbol_map, sink, &stmt_list_map);
+  ReadDWARFDebugInfo(file, dwarf::DIEReader::Section::kDebugInfo, symtab, sink,
+                     &stmt_list_map);
+  ReadDWARFDebugInfo(file, dwarf::DIEReader::Section::kDebugTypes, symtab, sink,
+                     &stmt_list_map);
   ReadDWARFPubNames(file, file.debug_pubnames, sink);
   ReadDWARFPubNames(file, file.debug_pubtypes, sink);
 }

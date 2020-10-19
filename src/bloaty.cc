@@ -1110,6 +1110,17 @@ void RangeSink::AddFileRangeForVMAddr(const char* analyzer,
   }
 }
 
+void RangeSink::BoundUnknownRegions(uint64_t addr) {
+  assert(translator_);
+  for (auto& pair : outputs_) {
+    uint64_t file_ofs;
+    pair.first->vm_map.BoundUnknownRegions(addr);
+    if (translator_->vm_map.Translate(addr, &file_ofs)) {
+      pair.first->file_map.BoundUnknownRegions(file_ofs);
+    }
+  }
+}
+
 void RangeSink::AddFileRangeForFileRange(const char* analyzer,
                                          absl::string_view from_file_range,
                                          absl::string_view file_range) {

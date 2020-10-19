@@ -173,6 +173,8 @@ class RangeSink {
   void AddVMRangeForVMAddr(const char* analyzer, uint64_t label_from_vmaddr,
                            uint64_t addr, uint64_t size);
 
+  void BoundUnknownRegions(uint64_t addr);
+
   // Try to add a reference from_vmaddr -> to_vmaddr, but don't throw errors
   // or warnings if either of the addresses is not mapped. This function is
   // useful if the reference is somewhat heuristic in nature, like finding
@@ -339,7 +341,7 @@ struct File {
 // Provided by dwarf.cc.  To use these, a module should fill in a dwarf::File
 // and then call these functions.
 void ReadDWARFCompileUnits(const dwarf::File& file, const SymbolTable& symtab,
-                           const DualMap& map, RangeSink* sink);
+                           RangeSink* sink);
 void ReadDWARFInlines(const dwarf::File& file, RangeSink* sink,
                       bool include_line);
 void ReadEhFrame(absl::string_view contents, RangeSink* sink);

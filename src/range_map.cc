@@ -63,6 +63,15 @@ RangeMap::Map::const_iterator RangeMap::FindContaining(uint64_t addr) const {
   }
 }
 
+RangeMap::Map::iterator RangeMap::FindContaining(uint64_t addr) {
+  auto it = mappings_.upper_bound(addr);  // Entry directly after.
+  if (it == mappings_.begin() || (--it, !EntryContains(it, addr))) {
+    return mappings_.end();
+  } else {
+    return it;
+  }
+}
+
 RangeMap::Map::iterator RangeMap::FindContainingOrAfter(uint64_t addr) {
   auto after = mappings_.upper_bound(addr);
   auto it = after;
@@ -286,6 +295,15 @@ bool RangeMap::AddRangeWithTranslation(uint64_t addr, uint64_t size,
   }
 
   return total_size == size;
+}
+
+void RangeMap::BoundUnknownRegions(uint64_t addr) {
+  auto it = FindContaining(addr);
+  if (it != mappings_.end() && it->first < addr &&
+      it->second.size == kUnknownSize) {
+    assert(it->first <= addr);
+    it->second.size = addr - it->first;
+  }
 }
 
 void RangeMap::Compress() {

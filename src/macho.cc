@@ -453,20 +453,22 @@ void ParseSymbolsFromSymbolTable(const LoadCommand& cmd, SymbolTable* table,
 
     string_view name = ReadNullTerminated(strtab, sym->n_un.n_strx);
 
-    if (sink->data_source() >= DataSource::kSymbols) {
-      sink->AddVMRange("macho_symbols", sym->n_value, RangeSink::kUnknownSize,
-                       ItaniumDemangle(name, sink->data_source()));
-    }
-
     if (table) {
       table->insert(std::make_pair(
           name, std::make_pair(sym->n_value, RangeSink::kUnknownSize)));
     }
 
-    // Capture the trailing NULL.
-    name = string_view(name.data(), name.size() + 1);
-    sink->AddFileRangeForVMAddr("macho_symtab_name", sym->n_value, name);
-    sink->AddFileRangeForVMAddr("macho_symtab_sym", sym->n_value, sym_range);
+    if (sink) {
+      if (sink->data_source() >= DataSource::kSymbols) {
+        sink->AddVMRange("macho_symbols", sym->n_value, RangeSink::kUnknownSize,
+                         ItaniumDemangle(name, sink->data_source()));
+      }
+
+      // Capture the trailing NULL.
+      name = string_view(name.data(), name.size() + 1);
+      sink->AddFileRangeForVMAddr("macho_symtab_name", sym->n_value, name);
+      sink->AddFileRangeForVMAddr("macho_symtab_sym", sym->n_value, sym_range);
+    }
   }
 }
 
@@ -617,17 +619,10 @@ class MachOObjectFile : public ObjectFile {
           break;
         case DataSource::kCompileUnits: {
           SymbolTable symtab;
-          DualMap symbol_map;
-          NameMunger empty_munger;
-          RangeSink symbol_sink(&debug_file().file_data(),
-                                sink->options(),
-                                DataSource::kRawSymbols,
-                                &sinks[0]->MapAtIndex(0));
-          symbol_sink.AddOutput(&symbol_map, &empty_munger);
-          ParseSymbols(debug_file().file_data().data(), &symtab, &symbol_sink);
+          ParseSymbols(debug_file().file_data().data(), &symtab, nullptr);
           dwarf::File dwarf;
           ReadDebugSectionsFromMachO(debug_file().file_data(), &dwarf);
-          ReadDWARFCompileUnits(dwarf, symtab, symbol_map, sink);
+          ReadDWARFCompileUnits(dwarf, symtab, sink);
           ParseSymbols(sink->input_file().data(), nullptr, sink);
           break;
         }
