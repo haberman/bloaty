@@ -237,32 +237,38 @@ extern "C" char* __cxa_demangle(const char* mangled_name, char* buf, size_t* n,
                                 int* status);
 
 std::string ItaniumDemangle(string_view symbol, DataSource source) {
+  std::string suffix;
   if (source == DataSource::kRawSymbols) {
     // No demangling.
     return std::string(symbol);
   }
 
-  string_view demangle_from = symbol;
+  std::string demangle_from(symbol);
   if (absl::StartsWith(demangle_from, "__Z")) {
-    demangle_from.remove_prefix(1);
+    demangle_from = demangle_from.substr(1);
+  }
+
+  if (absl::EndsWith(demangle_from, ".cold")) {
+    demangle_from = demangle_from.substr(0, demangle_from.size() - 5);
+    suffix = " [cold]" + suffix;
   }
 
   if (source == DataSource::kShortSymbols) {
     char demangled[1024];
-    if (::Demangle(demangle_from.data(), demangled, sizeof(demangled))) {
-      return std::string(demangled);
+    if (::Demangle(demangle_from.c_str(), demangled, sizeof(demangled))) {
+      return std::string(demangled) + suffix;
     } else {
-      return std::string(symbol);
+      return demangle_from + suffix;
     }
   } else if (source == DataSource::kFullSymbols) {
     char* demangled =
-        __cxa_demangle(demangle_from.data(), NULL, NULL, NULL);
+        __cxa_demangle(demangle_from.c_str(), NULL, NULL, NULL);
     if (demangled) {
       std::string ret(demangled);
       free(demangled);
-      return ret;
+      return ret + suffix;
     } else {
-      return std::string(symbol);
+      return demangle_from + suffix;
     }
   } else {
     printf("Unexpected source: %d\n", (int)source);
@@ -1188,6 +1194,18 @@ void RangeSink::MaybeAddVMReference(const char* analyzer, uint64_t from_vmaddr,
   }
   assert(translator_);
   for (auto& pair : outputs_) {
+    std::string from;
+    std::string to;
+    if (to_vmaddr < 0x1000 ||
+        !pair.first->vm_map.TryGetLabel(from_vmaddr, &from) ||
+        !translator_->vm_map.TryGetLabel(to_vmaddr, &to)) {
+      return;
+    }
+    // May fail.
+    pair.first->vm_map.TryGetLabel(to_vmaddr, &to);
+    if (from == to) return;
+    std::cout << std::hex << from_vmaddr << " " << from << " -> " << to << "\n";
+    /*
     std::string label;
     if (pair.first->vm_map.TryGetLabel(from_vmaddr, &label)) {
       bool ok = pair.first->vm_map.AddRangeWithTranslation(
@@ -1197,6 +1215,7 @@ void RangeSink::MaybeAddVMReference(const char* analyzer, uint64_t from_vmaddr,
     } else if (verbose_level > 2) {
       printf("No label found for vmaddr %" PRIx64 "\n", from_vmaddr);
     }
+    */
   }
 }
 
@@ -1611,7 +1630,7 @@ void Bloaty::ScanAndRollupFile(const std::string &filename, Rollup* rollup,
 
   // Base map always goes first.
   sinks.push_back(absl::make_unique<RangeSink>(&file->file_data(), options_,
-                                               DataSource::kSegments, nullptr));
+                                               DataSource::kSections, nullptr));
   NameMunger empty_munger;
   sinks.back()->AddOutput(maps.base_map(), &empty_munger);
   sink_ptrs.push_back(sinks.back().get());
@@ -2163,6 +2182,10 @@ void BloatyDoMain(const Options& options, const InputFileFactory& file_factory,
   for (const auto& custom_data_source : options.custom_data_source()) {
     bloaty.DefineCustomDataSource(custom_data_source);
   }
+
+  //if (options.data_source_size() != 1 || options.data_source(0) != "symbols") {
+  //  THROW("For this experiment, only '-d symbols' is supported");
+  //}
 
   for (const auto& data_source : options.data_source()) {
     bloaty.AddDataSource(data_source);

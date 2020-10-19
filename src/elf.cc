@@ -941,6 +941,50 @@ void AddSymbolTable(const InputFile& file, RangeSink* sink) {
       });
 }
 
+void AddPLT(RangeSink* sink) {
+  ForEachElf(sink->input_file(), sink,
+             [=](const ElfFile& elf, string_view /*filename*/,
+                 uint32_t /* index_base */) {
+               ElfFile::Section plt;
+               ElfFile::Section rela_plt;
+               ElfFile::Section dynsym;
+               ElfFile::Section strtab;
+               bool has_rela_plt = false;
+               for (Elf64_Xword i = 1; i < elf.section_count(); i++) {
+                 ElfFile::Section section;
+                 elf.ReadSection(i, &section);
+                 if (section.GetName() == ".plt") {
+                   plt = section;
+                 } else if (section.GetName() == ".rela.plt") {
+                   rela_plt = section;
+                   has_rela_plt = true;
+                 }
+               }
+
+               if (plt.contents().empty() || !has_rela_plt) {
+                 return;
+               }
+
+               elf.ReadSection(rela_plt.header().sh_link, &dynsym);
+               elf.ReadSection(dynsym.header().sh_link, &strtab);
+               const char* base = sink->input_file().data().data();
+
+               Elf64_Word entry_count = plt.GetEntryCount();
+               Elf64_Xword entry_size = plt.header().sh_entsize;
+               uint64_t ofs = plt.contents().data() + entry_size - base;
+               for (Elf64_Word i = 1; i < entry_count; i++, ofs += entry_size) {
+                 Elf64_Rela rela;
+                 Elf64_Sym sym;
+                 rela_plt.ReadRelocationWithAddend(i - 1, &rela, nullptr);
+                 dynsym.ReadSymbol(ELF64_R_SYM(rela.r_info), &sym, nullptr);
+                 std::string name = ItaniumDemangle(
+                     strtab.ReadString(sym.st_name), sink->data_source());
+                 name += "@plt";
+                 sink->AddFileRange("elf_plt", name, ofs, entry_size);
+               }
+             });
+}
+
 void DisassembleFunctions(const InputFile& file, RangeSink* sink) {
   DisassemblyInfo info;
   DisassemblyInfo* infop = &info;
@@ -1323,6 +1367,7 @@ class ElfObjectFile : public ObjectFile {
         case DataSource::kShortSymbols:
         case DataSource::kFullSymbols:
           AddSymbolTable(debug_file().file_data(), sink);
+          AddPLT(sink);
           break;
         case DataSource::kArchiveMembers:
           DoReadELFSections(sink, kReportByArchiveMember);
