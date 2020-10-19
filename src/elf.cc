@@ -969,7 +969,10 @@ void AddPLT(RangeSink* sink) {
                elf.ReadSection(dynsym.header().sh_link, &strtab);
                const char* base = sink->input_file().data().data();
 
-               Elf64_Word entry_count = plt.GetEntryCount();
+               // Some PLTs don't have an entry size. :/
+               // Elf64_Word entry_count = plt.GetEntryCount();
+               Elf64_Word entry_count = plt.contents().size() / 16;
+
                Elf64_Xword entry_size = plt.header().sh_entsize;
                uint64_t ofs = plt.contents().data() + entry_size - base;
                for (Elf64_Word i = 1; i < entry_count; i++, ofs += entry_size) {
