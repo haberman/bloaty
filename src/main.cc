@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "bloaty.h"
-#include "bloaty.pb.h"
+#include "src/bloaty.h"
+#include "src/bloaty.pb.h"
 
 #include <iostream>
 

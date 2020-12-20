@@ -15,12 +15,15 @@ cc_library(
     srcs = [
         "src/bloaty.cc",
         "src/bloaty.h",
+        "src/demangle.cc",
+        "src/demangle.h",
         "src/disassemble.cc",
         "src/dwarf.cc",
         "src/dwarf_constants.h",
         "src/elf.cc",
         "src/macho.cc",
         "src/range_map.cc",
+        "src/re.h",
         "src/webassembly.cc",
     ],
     hdrs = [
@@ -30,18 +33,16 @@ cc_library(
     copts = ["-fexceptions"],
     deps = [
         ":bloaty_cc_proto",
-        "//base",
-        "//net/proto2/io/public:io",
-        "//net/proto2/public:proto2",
-        "#com_google_absl//absl/base:core_headers",
-        "#com_google_absl//absl/memory",
-        "#com_google_absl//absl/numeric:int128",
-        "#com_google_absl//absl/strings",
-        "#com_google_absl//absl/types:optional",
-        "//third_party/capstone",
+        "@com_google_protobuf//:protobuf",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/numeric:int128",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:optional",
+        "@capstone//:capstone",
         "//third_party/darwin_xnu_macho",
         "//third_party/freebsd_elf",
-        "//third_party/re2",
+        "@com_googlesource_code_re2//:re2",
     ],
 )
 
@@ -96,7 +97,7 @@ cc_test(
     features = ["-use_header_modules"],  # Incompatible with -fexceptions.
     deps = [
         ":bloaty_lib",
-        "//testing/base/public:gunit_main",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

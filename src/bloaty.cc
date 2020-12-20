@@ -46,10 +46,10 @@
 #include "google/protobuf/io/zero_copy_stream_impl.h"
 #include "google/protobuf/text_format.h"
 
-#include "bloaty.h"
-#include "bloaty.pb.h"
-#include "demangle.h"
-#include "re.h"
+#include "src/bloaty.h"
+#include "src/bloaty.pb.h"
+#include "src/demangle.h"
+#include "src/re.h"
 
 using absl::string_view;
 

@@ -35,9 +35,9 @@
 #include "absl/strings/strip.h"
 #include "capstone/capstone.h"
 
-#include "bloaty.pb.h"
-#include "range_map.h"
-#include "re.h"
+#include "src/bloaty.pb.h"
+#include "src/range_map.h"
+#include "src/re.h"
 
 #define BLOATY_DISALLOW_COPY_AND_ASSIGN(class_name) \
   class_name(const class_name&) = delete; \

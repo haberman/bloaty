@@ -19,7 +19,7 @@
 //
 // Note that we only have partial C++0x support yet.
 
-#include "demangle.h"
+#include "src/demangle.h"
 
 #include <stdio.h>
 #include <stdint.h>

@@ -30,9 +30,9 @@
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "absl/types/optional.h"
-#include "bloaty.h"
-#include "bloaty.pb.h"
-#include "dwarf_constants.h"
+#include "src/bloaty.h"
+#include "src/bloaty.pb.h"
+#include "src/dwarf_constants.h"
 
 using namespace dwarf2reader;
 using absl::string_view;
